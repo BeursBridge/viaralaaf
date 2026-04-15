@@ -17,6 +17,21 @@ const DEFAULT_CHATKIT_BASE = "https://api.openai.com";
 const SESSION_COOKIE_NAME = "chatkit_session_id";
 const SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 30; // 30 days
 
+// ✅ CORS headers voor alle responses
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
+// ✅ OPTIONS handler voor preflight requests
+export async function OPTIONS(): Promise<Response> {
+  return new Response(null, {
+    status: 204,
+    headers: corsHeaders,
+  });
+}
+
 export async function POST(request: Request): Promise<Response> {
   if (request.method !== "POST") {
     return methodNotAllowedResponse();
@@ -31,12 +46,18 @@ export async function POST(request: Request): Promise<Response> {
         }),
         {
           status: 500,
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...corsHeaders },
         }
       );
     }
 
-    const parsedBody = await safeParseJson<CreateSessionRequestBody>(request);
+    let parsedBody: CreateSessionRequestBody | null = null;
+    try {
+      parsedBody = await request.json();
+    } catch {
+      parsedBody = null;
+    }
+
     const { userId, sessionCookie: resolvedSessionCookie } =
       await resolveUserId(request);
     sessionCookie = resolvedSessionCookie;
@@ -142,7 +163,7 @@ export async function GET(): Promise<Response> {
 function methodNotAllowedResponse(): Response {
   return new Response(JSON.stringify({ error: "Method Not Allowed" }), {
     status: 405,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...corsHeaders },
   });
 }
 
@@ -158,10 +179,12 @@ async function resolveUserId(request: Request): Promise<{
     return { userId: existing, sessionCookie: null };
   }
 
-  const generated =
-    typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : Math.random().toString(36).slice(2);
+  const generated = (() => {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return crypto.randomUUID();
+    }
+    return Math.random().toString(36).slice(2);
+  })();
 
   return {
     userId: generated,
@@ -213,6 +236,11 @@ function buildJsonResponse(
 ): Response {
   const responseHeaders = new Headers(headers);
 
+  // ✅ CORS headers toevoegen aan elke response
+  Object.entries(corsHeaders).forEach(([key, value]) => {
+    responseHeaders.set(key, value);
+  });
+
   if (sessionCookie) {
     responseHeaders.append("Set-Cookie", sessionCookie);
   }
@@ -221,18 +249,6 @@ function buildJsonResponse(
     status,
     headers: responseHeaders,
   });
-}
-
-async function safeParseJson<T>(req: Request): Promise<T | null> {
-  try {
-    const text = await req.text();
-    if (!text) {
-      return null;
-    }
-    return JSON.parse(text) as T;
-  } catch {
-    return null;
-  }
 }
 
 function extractUpstreamError(
